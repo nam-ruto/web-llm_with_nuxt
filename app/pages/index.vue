@@ -35,12 +35,12 @@
           </div>
 
           <UAlert
-            v-if="loadError"
-            color="rose"
+            v-if="errorMessage"
+            color="error"
             icon="i-heroicons-exclamation-triangle"
             variant="subtle"
           >
-            {{ loadError }}
+            {{ errorMessage }}
           </UAlert>
 
           <div class="space-y-4">
@@ -57,7 +57,7 @@
                   {{ message.role === 'assistant' ? 'Assistant' : 'You' }}
                 </span>
                 <p class="whitespace-pre-line text-sm leading-relaxed text-neutral-100">
-                  {{ renderMessageContent(message.content) }}
+                  {{ message.content }}
                 </p>
               </div>
             </div>
@@ -77,7 +77,11 @@
             </UFormGroup>
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p class="text-xs text-neutral-500">
-                {{ isReady ? 'Press Enter or click Send to submit your question.' : 'Load the model to start chatting.' }}
+                {{
+                  isReady
+                    ? 'Press Enter or click Send to submit your question.'
+                    : 'Load the model to start chatting.'
+                }}
               </p>
               <UButton
                 type="submit"
@@ -98,68 +102,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
-import {
-  CreateMLCEngine,
-  type ChatCompletionMessageParam,
-  type InitProgressReport,
-  type MLCEngine
-} from '@mlc-ai/web-llm'
+import { ref } from 'vue'
+import { useWebLLM } from '../../composables/useWebLLM'
 
-const modelId = 'SmolLM2-1.7B-Instruct-q4f16_1-MLC'
-
-const engine = shallowRef<MLCEngine | null>(null)
-const isLoadingModel = ref(false)
-const loadProgress = ref<InitProgressReport | null>(null)
-const loadError = ref<string | null>(null)
 const prompt = ref('')
-const conversation = ref<ChatCompletionMessageParam[]>([])
-const isGenerating = ref(false)
 
-const isReady = computed(() => engine.value !== null)
-const statusLabel = computed(() => {
-  if (isReady.value) {
-    return 'Ready'
-  }
-  if (isLoadingModel.value) {
-    return 'Loading model'
-  }
-  return 'Not loaded'
-})
-const statusColor = computed(() => {
-  if (isReady.value) {
-    return 'emerald'
-  }
-  if (isLoadingModel.value) {
-    return 'amber'
-  }
-  return 'gray'
-})
-
-const updateProgress = (report: InitProgressReport) => {
-  loadProgress.value = report
-}
-
-const loadModel = async () => {
-  if (isLoadingModel.value || engine.value) {
-    return
-  }
-
-  loadError.value = null
-  isLoadingModel.value = true
-  loadProgress.value = null
-
-  try {
-    engine.value = await CreateMLCEngine(modelId, {
-      initProgressCallback: updateProgress
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    loadError.value = `Failed to load model: ${message}`
-  } finally {
-    isLoadingModel.value = false
-  }
-}
+const {
+  modelId,
+  conversation,
+  isReady,
+  statusLabel,
+  statusColor,
+  isLoadingModel,
+  loadProgress,
+  errorMessage,
+  isGenerating,
+  loadModel,
+  sendMessage
+} = useWebLLM()
 
 const handleSubmit = async () => {
   if (!isReady.value || isGenerating.value) {
@@ -171,68 +131,13 @@ const handleSubmit = async () => {
     return
   }
 
-  const userMessage: ChatCompletionMessageParam = {
-    role: 'user',
-    content: value
-  }
-
-  conversation.value = [...conversation.value, userMessage]
   prompt.value = ''
-  loadError.value = null
-  isGenerating.value = true
 
   try {
-    const response = await engine.value!.chat.completions.create({
-      messages: conversation.value
-    })
-
-    const rawContent = response.choices?.[0]?.message?.content
-    const assistantText = normalizeContent(rawContent)
-
-    if (assistantText) {
-      conversation.value = [...conversation.value, { role: 'assistant', content: assistantText }]
-    }
+    await sendMessage(value)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    loadError.value = `Failed to generate response: ${message}`
-  } finally {
-    isGenerating.value = false
+    console.error('Failed to send message', error)
   }
 }
-
-const renderMessageContent = (content: ChatCompletionMessageParam['content']) => {
-  if (typeof content === 'string') {
-    return content
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => ('text' in part && part.text ? part.text : ''))
-      .join('\n')
-  }
-  return ''
-}
-
-const normalizeContent = (content: unknown) => {
-  if (typeof content === 'string') {
-    return content
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => (typeof part === 'object' && part && 'text' in part ? (part as { text?: string }).text ?? '' : ''))
-      .join('\n')
-      .trim()
-  }
-  return ''
-}
-
-onBeforeUnmount(async () => {
-  if (engine.value) {
-    try {
-      await engine.value.unload()
-    } catch (error) {
-      console.warn('Failed to unload model', error)
-    }
-  }
-})
 </script>
 
