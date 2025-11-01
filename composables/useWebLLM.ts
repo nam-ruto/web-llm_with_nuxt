@@ -39,13 +39,18 @@ const toErrorMessage = (error: unknown) => (error instanceof Error ? error.messa
 export const useWebLLM = (model = DEFAULT_MODEL_ID) => {
   const modelId = ref(model)
   const engine = shallowRef<MLCEngine | null>(null)
+  const loadedModelId = ref<string | null>(null)
+  const loadingModelId = ref<string | null>(null)
+  const pendingModelId = ref<string | null>(null)
   const isLoadingModel = ref(false)
   const loadProgress = ref<InitProgressReport | null>(null)
   const errorMessage = ref<string | null>(null)
   const conversation = ref<ChatCompletionMessageParam[]>([])
   const isGenerating = ref(false)
 
-  const isReady = computed(() => engine.value !== null)
+  const isReady = computed(
+    () => engine.value !== null && loadedModelId.value === modelId.value
+  )
   const statusLabel = computed(() => {
     if (isReady.value) {
       return 'Ready'
@@ -65,27 +70,92 @@ export const useWebLLM = (model = DEFAULT_MODEL_ID) => {
     return 'neutral'
   })
 
+  const setModelId = async (nextModelId: string) => {
+    if (modelId.value === nextModelId) {
+      return
+    }
+
+    modelId.value = nextModelId
+    pendingModelId.value = nextModelId
+    conversation.value = []
+    loadProgress.value = null
+    errorMessage.value = null
+
+    if (isGenerating.value && engine.value) {
+      try {
+        engine.value.interruptGenerate()
+      } catch (error) {
+        console.warn('Failed to interrupt generation', error)
+      }
+      isGenerating.value = false
+    }
+
+    const previousEngine = engine.value
+    engine.value = null
+    loadedModelId.value = null
+
+    if (previousEngine) {
+      try {
+        await previousEngine.unload()
+      } catch (error) {
+        console.warn('Failed to unload previous model', error)
+      }
+    }
+  }
+
   const loadModel = async () => {
-    if (isLoadingModel.value || engine.value) {
+    const targetModelId = modelId.value
+
+    if (!targetModelId) {
+      return
+    }
+
+    if (isLoadingModel.value) {
+      pendingModelId.value = targetModelId
       return
     }
 
     errorMessage.value = null
     isLoadingModel.value = true
     loadProgress.value = null
+    loadingModelId.value = targetModelId
+    pendingModelId.value = null
 
     try {
-      engine.value = await CreateMLCEngine(modelId.value, {
+      const nextEngine = await CreateMLCEngine(targetModelId, {
         initProgressCallback: (report: InitProgressReport) => {
           loadProgress.value = report
         }
       })
+
+      if (modelId.value !== targetModelId) {
+        await nextEngine.unload()
+        return
+      }
+
+      engine.value = nextEngine
+      loadedModelId.value = targetModelId
     } catch (error) {
       const message = toErrorMessage(error)
       errorMessage.value = `Failed to load model: ${message}`
       throw error
     } finally {
       isLoadingModel.value = false
+      loadingModelId.value = null
+
+      if (modelId.value !== targetModelId) {
+        pendingModelId.value = modelId.value
+      }
+
+      const nextPending = pendingModelId.value
+      if (nextPending && nextPending !== loadedModelId.value) {
+        pendingModelId.value = null
+        if (modelId.value === nextPending) {
+          Promise.resolve().then(() => {
+            void loadModel()
+          })
+        }
+      }
     }
   }
 
@@ -183,15 +253,18 @@ export const useWebLLM = (model = DEFAULT_MODEL_ID) => {
 
   return {
     modelId,
+    loadedModelId,
     engine,
     isReady,
     statusLabel,
     statusColor,
     isLoadingModel,
+    loadingModelId,
     loadProgress,
     errorMessage,
     conversation,
     isGenerating,
+    setModelId,
     loadModel,
     sendMessage,
     resetConversation

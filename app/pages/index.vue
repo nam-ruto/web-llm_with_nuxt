@@ -6,7 +6,11 @@
           <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 class="text-xl font-semibold">WebLLM Assistant</h1>
-              <p class="text-sm text-neutral-400">Model: {{ modelId }}</p>
+              <p class="text-sm text-neutral-400">
+                Model:
+                <span class="font-medium text-neutral-200">{{ selectedModelLabel }}</span>
+                <span class="text-xs text-neutral-500 sm:ms-2">({{ modelId }})</span>
+              </p>
             </div>
             <UBadge :color="statusColor" variant="soft" class="w-fit">
               {{ statusLabel }}
@@ -15,22 +19,27 @@
         </template>
 
         <div class="space-y-6">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <UButton
-              icon="i-heroicons-cpu-chip"
-              size="lg"
-              :loading="isLoadingModel"
-              :disabled="isLoadingModel || isReady"
-              @click="loadModel"
-            >
-              {{ isReady ? 'Model Loaded' : 'Load Model' }}
-            </UButton>
-            <div class="text-sm text-neutral-400 sm:flex-1">
-              <p v-if="isLoadingModel && loadProgress">
-                Loading… {{ Math.round(loadProgress.progress * 100) }}% — {{ loadProgress.text }}
-              </p>
-              <p v-else-if="isReady">Ready to chat.</p>
-              <p v-else>Click the button to download and initialize the model.</p>
+          <UFormGroup label="Model" name="model">
+            <USelect
+              v-model="selectedModel"
+              :items="modelOptions"
+              :disabled="isLoadingModel || isGenerating"
+              placeholder="Select a model"
+            />
+          </UFormGroup>
+          <div class="rounded-lg border border-neutral-800/60 bg-neutral-950/60 p-4">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div class="space-y-1">
+                <p class="text-sm font-semibold text-neutral-200">{{ selectedModelLabel }}</p>
+                <p class="text-xs text-neutral-500">Model ID: {{ modelId }}</p>
+              </div>
+              <div class="text-sm text-neutral-400">
+                <p v-if="isLoadingModel && loadProgress">
+                  Loading… {{ Math.round(loadProgress.progress * 100) }}% — {{ loadProgress.text }}
+                </p>
+                <p v-else-if="isReady" class="text-emerald-400">Ready to chat.</p>
+                <p v-else>Preparing weights…</p>
+              </div>
             </div>
           </div>
 
@@ -80,7 +89,7 @@
                 {{
                   isReady
                     ? 'Press Enter or click Send to submit your question.'
-                    : 'Load the model to start chatting.'
+                    : 'Waiting for the model to finish loading before you can chat.'
                 }}
               </p>
               <UButton
@@ -102,10 +111,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useWebLLM } from '../../composables/useWebLLM'
 
 const prompt = ref('')
+const modelOptions = [
+  {
+    label: 'Gemma 2 (2B) Instruct',
+    value: 'gemma-2-2b-it-q4f16_1-MLC'
+  },
+  {
+    label: 'SmolLM2 (1.7B) Instruct',
+    value: 'SmolLM2-1.7B-Instruct-q4f16_1-MLC'
+  }
+]
+const selectedModel = ref(
+  modelOptions[1]?.value ?? modelOptions[0]?.value ?? ''
+)
+const selectedModelLabel = computed(
+  () => modelOptions.find((option) => option.value === selectedModel.value)?.label ?? selectedModel.value
+)
 
 const {
   modelId,
@@ -117,9 +142,30 @@ const {
   loadProgress,
   errorMessage,
   isGenerating,
+  setModelId,
   loadModel,
   sendMessage
 } = useWebLLM()
+
+watch(
+  selectedModel,
+  (value, previous) => {
+    if (!value) {
+      return
+    }
+
+    void (async () => {
+      if (value !== previous) {
+        await setModelId(value)
+      }
+
+      await loadModel()
+    })().catch((error) => {
+      console.error('Failed to load model', error)
+    })
+  },
+  { immediate: true }
+)
 
 const handleSubmit = async () => {
   if (!isReady.value || isGenerating.value) {
